@@ -1,0 +1,24 @@
+// Generated code by gotem
+package {{.Package}}
+
+import (
+	{{range .Imports }} "{{.}}"
+	{{ end }}
+)
+{{$servicePackage := .ServicePackage}}
+{{$domain := .Domain}}
+{{range .Body}}
+{{$serviceName := .ServiceName}}
+
+{{.Comment}}
+type {{$serviceName}}{{$domain}}Impl interface {
+	{{$servicePackage}}.Unimplemented{{$serviceName}}Server
+}
+{{range .Methods}}
+{{.Comment}}
+func (h *{{$serviceName}}{{$domain}}Impl) {{.Name}}(
+	{{range .Args}} {{.Alias}} {{.Type}}, {{end}}
+) ({{range .Returns}} {{.Alias}} {{.Type}}, {{end}}) {
+}
+{{end}}
+{{end}}

@@ -1,0 +1,28 @@
+// Generated code by gotem
+package {{.Package}}
+
+import (
+	{{range .Imports }} "{{.}}"
+	{{ end }}
+)
+{{$servicePackage := .ServicePackage}}
+{{$domain := .Domain}}
+{{range .Body}}
+{{$serviceName := .ServiceName}}
+var _ {{$servicePackage}}.{{$serviceName}}Server = new({{$serviceName}}{{$domain}}Impl)
+
+// {{.Comment}}
+func New{{$serviceName}}{{$domain}}(
+)
+
+type {{$serviceName}}{{$domain}}Impl struct {
+	{{$servicePackage}}.Unimplemented{{$serviceName}}Server
+}
+{{range .Methods}}
+{{.Comment}}
+func (h *{{$serviceName}}{{$domain}}Impl) {{.Name}}(
+	{{range .Args}} {{.Alias}} {{.Type}}, {{end}}
+) ({{range .Returns}} {{.Alias}} {{.Type}}, {{end}}) {
+}
+{{end}}
+{{end}}
