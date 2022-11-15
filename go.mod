@@ -1,4 +1,4 @@
-module github.com/go-templater
+module github.com/dotdak/go-templater
 
 go 1.19
 

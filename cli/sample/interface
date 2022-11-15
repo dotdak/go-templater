@@ -2,23 +2,18 @@
 package {{.Package}}
 
 import (
-	{{range .Imports }} "{{.}}"
+	{{range .Imports }} {{.Name}} "{{.Path}}"
 	{{ end }}
 )
-{{$servicePackage := .ServicePackage}}
 {{$domain := .Domain}}
 {{range .Body}}
-{{$serviceName := .ServiceName}}
-
 {{.Comment}}
-type {{$serviceName}}{{$domain}}Impl interface {
-	{{$servicePackage}}.Unimplemented{{$serviceName}}Server
-}
+type {{.Name}}{{$domain}} interface {
 {{range .Methods}}
-{{.Comment}}
-func (h *{{$serviceName}}{{$domain}}Impl) {{.Name}}(
+	{{.Comment}}
+	{{.Name}}(
 	{{range .Args}} {{.Alias}} {{.Type}}, {{end}}
-) ({{range .Returns}} {{.Alias}} {{.Type}}, {{end}}) {
-}
+) ({{range .Returns}} {{.Alias}} {{.Type}}, {{end}})
 {{end}}
+}
 {{end}}

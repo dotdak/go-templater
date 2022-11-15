@@ -2,7 +2,8 @@
 package {{.Package}}
 
 import (
-	{{range .Imports }} "{{.}}"
+	"errors"
+	{{range .Imports }} {{.Name}} "{{.Path}}"
 	{{ end }}
 )
 {{$servicePackage := .ServicePackage}}
@@ -13,16 +14,33 @@ var _ {{$servicePackage}}.{{$serviceName}}Server = new({{$serviceName}}{{$domain
 
 // {{.Comment}}
 func New{{$serviceName}}{{$domain}}(
-)
+	{{range .Injectors}} {{.Alias}} {{.Package}}.{{.Name}},
+	{{end}}
+) {{$servicePackage}}.{{$serviceName}}Server {
+	// name := "{{$serviceName}}{{$domain}}"
+	return &{{$serviceName}}{{$domain}}Impl{
+		{{range .Injectors}} {{.Alias}}: {{.Alias}},
+		{{end}}
+	}
+}
 
 type {{$serviceName}}{{$domain}}Impl struct {
-	{{$servicePackage}}.Unimplemented{{$serviceName}}Server
+	{{$servicePackage}}.Unimplemented{{$serviceName}}ServiceServer
+
+	{{range .Injectors}} {{.Alias}} {{.Package}}.{{.Name}}
+	{{end}}
 }
 {{range .Methods}}
 {{.Comment}}
 func (h *{{$serviceName}}{{$domain}}Impl) {{.Name}}(
 	{{range .Args}} {{.Alias}} {{.Type}}, {{end}}
 ) ({{range .Returns}} {{.Alias}} {{.Type}}, {{end}}) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
+	return nil, errors.New("not implemented")
+	// return &{{$servicePackage}}.{{$serviceName}}{{.Name}}Response{}, nil
 }
 {{end}}
 {{end}}

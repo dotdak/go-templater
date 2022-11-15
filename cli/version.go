@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/go-templater/version"
+	"github.com/dotdak/go-templater/version"
 	"github.com/peterbourgon/ff/v3/ffcli"
 )
 

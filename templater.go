@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/go-templater/cli"
+	"github.com/dotdak/go-templater/cli"
 )
 
 func main() {

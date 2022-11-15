@@ -9,7 +9,8 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 )
 
-var ErrLog = log.New(os.Stderr, "gotem", log.LstdFlags|log.Lshortfile)
+var ErrLog = log.New(os.Stderr, "ERR ", log.LstdFlags|log.Lshortfile)
+var WarnLog = log.New(os.Stdout, "WARN ", log.LstdFlags|log.Lshortfile)
 
 func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)

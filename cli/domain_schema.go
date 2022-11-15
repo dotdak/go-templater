@@ -3,12 +3,11 @@ package cli
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"go/format"
-	"io/fs"
 	"io/ioutil"
 	"os"
-	"strings"
 	"text/template"
 )
 
@@ -16,7 +15,8 @@ import (
 var sample string
 
 type DomainGenerator struct {
-	Imports        []string
+	FileName       string
+	Imports        []*Import
 	ImportPackage  string
 	Package        string
 	Domain         string
@@ -24,9 +24,21 @@ type DomainGenerator struct {
 	Body           []*DomainBody
 }
 
+type Injector struct {
+	Alias   string
+	Name    string
+	Package string
+}
+
+type Import struct {
+	Name string
+	Path string
+}
+
 type DomainBody struct {
 	ServiceName string
 	Comment     string
+	Injectors   []*Injector
 	Methods     []*MethodBody
 	Args        []*Args
 	Returns     []*Args
@@ -42,15 +54,6 @@ type MethodBody struct {
 type Args struct {
 	Alias string
 	Type  string
-}
-
-func (g *DomainGenerator) gen(filename string) error {
-	body := strings.Builder{}
-	body.WriteString("package ")
-	body.WriteString(g.Package)
-	body.WriteRune('\n')
-	body.WriteString("OK")
-	return ioutil.WriteFile(filename, []byte(body.String()), fs.ModePerm)
 }
 
 func (g *DomainGenerator) Render() ([]byte, error) {
@@ -71,21 +74,26 @@ func (g *DomainGenerator) Render() ([]byte, error) {
 	return src, nil
 }
 
-func (g *DomainGenerator) Print() {
+func (g *DomainGenerator) Print(args ...any) error {
 	src, err := g.Render()
 	if err != nil {
 		ErrLog.Println(err)
-		return
-	}
-
-	fmt.Println(string(src))
-}
-
-func (g *DomainGenerator) WriteFile(filename string) error {
-	src, err := g.Render()
-	if err != nil {
 		return err
 	}
 
-	return ioutil.WriteFile(filename, src, os.ModePerm)
+	fmt.Println(string(src))
+	return nil
+}
+
+func (g *DomainGenerator) WriteFile(overwrite bool) error {
+	if _, err := os.Stat(g.FileName); !errors.Is(err, os.ErrNotExist) && !overwrite {
+		WarnLog.Printf("ignore %s, file exists", g.FileName)
+		return nil
+	}
+	src, err := g.Render()
+	if err != nil {
+		return fmt.Errorf("render: %w", err)
+	}
+
+	return ioutil.WriteFile(g.FileName, src, os.ModePerm)
 }

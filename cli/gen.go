@@ -8,16 +8,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io"
 	"io/fs"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"github.com/go-templater/pkg/module"
-	"github.com/go-templater/pkg/shorten"
+	"github.com/dotdak/go-templater/pkg/module"
+	"github.com/dotdak/go-templater/pkg/shorten"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
 	"github.com/yoheimuta/go-protoparser/v4"
@@ -38,10 +36,11 @@ var (
 		FlagSet: func() *flag.FlagSet {
 			fs := newFlagSet("gen")
 			fs.StringVar(&genArgs.in, "in", "", "input package directory")
-			fs.StringVar(&genArgs.out, "out", "handlers/v1", "output directory")
+			fs.StringVar(&genArgs.out, "out", "./handlers/v1", "output directory")
 			fs.StringVar(&genArgs.domain, "domain", "Handler", "specify generated domain")
 			fs.StringVar(&genArgs.subDomain, "subdomain", "Service", "specify generated domain")
-			fs.StringVar(&genArgs.subDomainOut, "subdomain out", "services", "specify generated domain")
+			fs.StringVar(&genArgs.subDomainOut, "subdomain-out", "./services", "specify generated domain")
+			fs.BoolVar(&genArgs.overWrite, "overwrite", true, "overwrite existed generated files")
 			return fs
 		}(),
 		Exec: generate,
@@ -55,6 +54,7 @@ var (
 		subDomainOut string
 		domain       string
 		subDomain    string
+		overWrite    bool
 		// WIP
 		inProto string
 	}
@@ -152,53 +152,41 @@ func readProto() error {
 	return nil
 }
 
+func getPackageFromDir(dir string) string {
+	parts := strings.Split(dir, "/")
+	return parts[len(parts)-1]
+}
+
 func generate(ctx context.Context, args []string) error {
-	absPath, err := filepath.Abs(genArgs.in)
+	inAbs, err := filepath.Abs(genArgs.in)
 	if err != nil {
 		return err
 	}
-
-	cfg := &packages.Config{
-		Context: ctx,
-		Mode:    packages.LoadAllSyntax,
-		Dir:     absPath,
-		Env:     os.Environ(),
-	}
-
-	pkgs, err := packages.Load(cfg, absPath)
+	outAbs, err := filepath.Abs(genArgs.out)
 	if err != nil {
 		return err
 	}
-
-	for _, pkg := range pkgs {
-		for _, goFile := range pkg.GoFiles {
-			if !strings.HasSuffix(goFile, "_grpc.pb.go") {
-				continue
-			}
-
-			_, err := ioutil.ReadFile(goFile)
-			if err != nil {
-				fmt.Fprint(os.Stderr, err.Error())
-				continue
-			}
-
-		}
+	subOutAbs, err := filepath.Abs(genArgs.subDomainOut)
+	if err != nil {
+		return err
 	}
 	fset := token.NewFileSet()
-	packages, err := parser.ParseDir(fset, absPath, func(fi fs.FileInfo) bool {
+	packages, err := parser.ParseDir(fset, inAbs, func(fi fs.FileInfo) bool {
 		return strings.HasSuffix(fi.Name(), "_grpc.pb.go")
 	}, parser.ParseComments)
 	if err != nil {
 		return err
 	}
-	// newFset := token.NewFileSet()
+	const preAlloc = 5
+	domainFiles := make([]*DomainGenerator, 0, preAlloc)
+	intFiles := make(map[string]*IntGen)
 	for pkgName, v := range packages {
 		for fileName, fi := range v.Files {
-			pkgPath := absPath
-			if strings.HasPrefix(absPath, goPath+"/pkg/mod") {
+			pkgPath := inAbs
+			if strings.HasPrefix(inAbs, goPath+"/pkg/mod") {
 				pkgPath = strings.TrimPrefix(pkgPath, goPath+"/pkg/mod/")
 			} else {
-				pkgPath = "github.com" + absPath
+				pkgPath = "github.com" + inAbs
 			}
 
 			pkgPath = versionReg.ReplaceAllString(pkgPath, "")
@@ -207,15 +195,36 @@ func generate(ctx context.Context, args []string) error {
 				ErrLog.Println(err)
 				continue
 			}
-
-			fileGen := &DomainGenerator{
-				Package: "v1",
-				Imports: []string{
-					"context",
-					pkgPath,
+			parts := strings.Split(fileName, "/")
+			domainFile := &DomainGenerator{
+				FileName: fmt.Sprintf(
+					"%s/%s_%s.go",
+					outAbs,
+					shorten.TrimFileName(parts[len(parts)-1]),
+					strings.ToLower(genArgs.domain),
+				),
+				Package: getPackageFromDir(outAbs),
+				Imports: []*Import{
+					{Path: "context"},
+					{Path: pkgPath},
+					{Name: shorten.Lookup(genArgs.subDomain), Path: "github.com/" + subOutAbs[strings.Index(subOutAbs, "go-templater"):]},
 				},
 				ServicePackage: pkgName,
 				Domain:         genArgs.domain,
+			}
+			intFile := &IntGen{
+				FileName: fmt.Sprintf(
+					"%s/%s_%s.go",
+					subOutAbs,
+					shorten.TrimFileName(parts[len(parts)-1]),
+					strings.ToLower(genArgs.subDomain),
+				),
+				Package: getPackageFromDir(subOutAbs),
+				Domain:  genArgs.subDomain,
+				Imports: []*Import{
+					{Path: "context"},
+					{Path: pkgPath},
+				},
 			}
 			astutil.Apply(fi, nil, func(c *astutil.Cursor) bool {
 				switch x := c.Node().(type) {
@@ -230,12 +239,23 @@ func generate(ctx context.Context, args []string) error {
 						strings.HasPrefix(intName, "Unsafe") {
 						return true
 					}
+					intName = strings.TrimSuffix(intName, "ServiceServer")
+					subDomainName := intName + genArgs.subDomain
 					domainBody := &DomainBody{
-						ServiceName: strings.TrimSuffix(intName, "Server"),
+						ServiceName: intName,
+						Injectors: []*Injector{{
+							Name:    subDomainName,
+							Alias:   shorten.LowerFirst(subDomainName),
+							Package: shorten.Lookup(genArgs.subDomain),
+						}},
 					}
+					intBody := &IntBody{
+						Name: intName,
+					}
+
 					for _, metRaw := range y.Methods.List {
 						metName := metRaw.Names[0].Name
-						if strings.HasPrefix("mustEmbedUnimplemented", metName) {
+						if strings.HasPrefix(metName, "mustEmbedUnimplemented") {
 							continue
 						}
 						met := metRaw.Type.(*ast.FuncType)
@@ -263,72 +283,83 @@ func generate(ctx context.Context, args []string) error {
 								continue
 							}
 						}
-						// for _, retRaw := range met.Results.List {
-						// 	fmt.Printf("%T\n", retRaw.Type)
-						// 	if ret, ok := retRaw.Type.(*ast.StarExpr); ok {
-						// 		retType := fmt.Sprint(ret.X)
-						// 		retName := shorten.Lookup(retType)
-						// 		retType = fmt.Sprintf("*%s.%s", v.Name, retType)
-						// 		methodBody.Returns = append(methodBody.Returns, &Args{
-						// 			Alias: retName, Type: retType,
-						// 		})
-						// 		continue
-						// 	}
-						// 	if ret, ok := retRaw.Type.(*ast.Ident); ok {
-						// 		methodBody.Returns = append(methodBody.Returns, &Args{
-						// 			Alias: shorten.Lookup(ret.Name), Type: ret.Name,
-						// 		})
-						// 		continue
-						// 	}
-						// }
+						for _, retRaw := range met.Results.List {
+							if ret, ok := retRaw.Type.(*ast.StarExpr); ok {
+								retType := fmt.Sprint(ret.X)
+								retType = fmt.Sprintf("*%s.%s", v.Name, retType)
+								methodBody.Returns = append(methodBody.Returns, &Args{
+									Type: retType,
+								})
+								continue
+							}
+							if ret, ok := retRaw.Type.(*ast.Ident); ok {
+								methodBody.Returns = append(methodBody.Returns, &Args{
+									Type: ret.Name,
+								})
+								continue
+							}
+						}
 						domainBody.Methods = append(domainBody.Methods, methodBody)
+						intBody.Methods = append(intBody.Methods, methodBody)
 					}
-					fileGen.Body = append(fileGen.Body, domainBody)
-
-					// buf, _ := json.Marshal(x)
-					// fmt.Println("block", string(buf))
+					domainFile.Body = append(domainFile.Body, domainBody)
+					intFile.Body = append(intFile.Body, intBody)
 				default:
-					// fmt.Printf("default %T\n", x)
-					// buf, _ := json.Marshal(x)
-					// fmt.Println("block", string(buf))
-					// fmt.Printf("value %v\n", x)
 				}
 				return true
 			})
-			// io, e := os.Create(fmt.Sprintf("%s/%s.go", genArgs.out, name))
-			// if e != nil {
-			// 	ErrLog.Println(e)
-			// 	continue
-			// }
-			// io.Close()
-
-			// printer.Fprint(io, newFset, newFile)
-			// printer.Fprint(os.Stdout, newFset, newFile)
-			parts := strings.Split(fileName, "/")
-			name := fmt.Sprintf("./%s/%s_handlers.go", genArgs.out, strings.TrimSuffix(parts[len(parts)-1], ".pb.go"))
-			fmt.Fprint(io.Discard, name)
-			if err := fileGen.WriteFile(name); err != nil {
-				ErrLog.Println(err)
+			domainFiles = append(domainFiles, domainFile)
+			for _, in := range intFile.Body {
+				intFiles[in.Name] = intFile
 			}
 		}
-		// fmt.Println(k, string(buf))
-	}
-	// buf, _ := json.Marshal(fset)
-	// fmt.Println(string(buf))
-
-	if err := os.MkdirAll(genArgs.out, os.ModePerm); err != nil {
-		return err
 	}
 
-	// goPath := os.Getenv("HOME") + "/go"
-	// fmt.Println(goPath)
-	// fset := token.NewFileSet()
-	// file, err := fileproto_parser.ParseFile(fset, "~/go/pkg/mod/github.com/codeZdeco/evere-proto/go/v1/services/agency_ctl_service.pb.go", nil, fileproto_parser.ParseComments)
+	// entitiesPkgs, err := parser.ParseDir(fset, absPath, func(fi fs.FileInfo) bool {
+	// 	return strings.HasSuffix(fi.Name(), ".pb.go") && !strings.HasSuffix(fi.Name(), "_grpc.pb.go")
+	// }, parser.ParseComments)
 	// if err != nil {
 	// 	return err
 	// }
 
-	// fmt.Println(file)
+	// for _, v := range entitiesPkgs {
+	// 	for fileName, fi := range v.Files {
+	// 		astutil.Apply(fi, nil, func(c *astutil.Cursor) bool {
+	// 			switch x := c.Node().(type) {
+	// 			case *ast.ImportSpec:
+	// 				if !strings.Contains(x.Path.Value, "entities") {
+	// 					return true
+	// 				}
+
+	// 				x.Name
+	// 				intGen.Imports = append(intGen.Imports, x.Path.Value)
+	// 			}
+
+	// 			return true
+	// 		})
+	// 		intGens = append(intGens, intGen)
+	// 	}
+	// }
+
+	if err := os.MkdirAll(outAbs, os.ModePerm); err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(subOutAbs, os.ModePerm); err != nil {
+		return err
+	}
+
+	for _, fi := range domainFiles {
+		if err := fi.WriteFile(genArgs.overWrite); err != nil {
+			ErrLog.Println(err)
+		}
+	}
+
+	for _, fi := range intFiles {
+		if err := fi.WriteFile(genArgs.overWrite); err != nil {
+			ErrLog.Println(err)
+		}
+	}
+
 	return nil
-	// return generator.gen(genArgs.out)
 }
